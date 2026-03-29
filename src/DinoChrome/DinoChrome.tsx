@@ -1,5 +1,5 @@
 import { useRef, useEffect, useCallback, useState } from 'react'
-import type { Player } from 'textalive-app-api'
+import type { Player, IBeat, ISongMap, IChord } from 'textalive-app-api'
 import type { WordLyric } from '../types'
 import './DinoChrome.css'
 
@@ -15,10 +15,24 @@ const BLINK_STEP = 150
 const FONT_SIZE  = 26
 const FONT       = `bold ${FONT_SIZE}px "Courier New", Courier, monospace`
 
+// ── Chord → hue (circle of fifths) ──────────────────────────────────────────
+const CHORD_HUES: Record<string, number> = {
+  C: 200, G: 160, D: 130, A: 90, E: 50, B: 25,
+  'F#': 355, Gb: 355, 'C#': 330, Db: 330,
+  'G#': 300, Ab: 300, 'D#': 270, Eb: 270,
+  'A#': 245, Bb: 245, F: 215,
+}
+function chordToHue(name: string) {
+  return CHORD_HUES[name.match(/^[A-G][#b]?/)?.[0] ?? 'C'] ?? 200
+}
+function chordIsMinor(name: string) {
+  return /^[A-G][#b]?m(?!aj)/i.test(name)
+}
+
 // ── Internal game types ───────────────────────────────────────────────────────
 interface TrexState  { y: number; vy: number; grounded: boolean }
 interface BlinkState { active: boolean; timer: number; visible: boolean }
-interface Cloud      { x: number; y: number }
+interface Cloud      { x: number; y: number; scale: number; glitchX: number; color: string }
 interface Obstacle   { id: number; word: string; x: number; w: number }
 
 interface GameState {
@@ -27,9 +41,11 @@ interface GameState {
   trex:      TrexState
   obstacles: Obstacle[]
   clouds:    Cloud[]
+  score:     number
   hitCount:  number
   blink:     BlinkState
   hitIds:    Set<number>
+  passedIds: Set<number>
   frameMs:   number
 }
 
@@ -42,18 +58,24 @@ interface Props {
 }
 
 // ── Canvas helpers ────────────────────────────────────────────────────────────
-function drawGround(ctx: CanvasRenderingContext2D, w: number, groundY: number) {
-  ctx.fillStyle = '#535353'
-  ctx.fillRect(0, groundY, w, 2)
+function drawGround(ctx: CanvasRenderingContext2D, w: number, groundY: number, thickness = 2, color = '#535353') {
+  ctx.fillStyle = color
+  ctx.fillRect(0, groundY, w, thickness)
 }
 
-function drawCloud(ctx: CanvasRenderingContext2D, x: number, y: number) {
-  ctx.fillStyle = '#d4d4d4'
+function drawCloud(ctx: CanvasRenderingContext2D, x: number, y: number, scale = 1, glitchX = 0, color = '#d4d4d4') {
+  const cx = x + glitchX
+  ctx.save()
+  ctx.translate(cx + 25, y + 9)
+  ctx.scale(scale, scale)
+  ctx.translate(-(cx + 25), -(y + 9))
+  ctx.fillStyle = color
   ctx.beginPath()
-  ctx.arc(x + 10, y + 9,  9,  0, Math.PI * 2)
-  ctx.arc(x + 23, y + 5,  13, 0, Math.PI * 2)
-  ctx.arc(x + 40, y + 9,  9,  0, Math.PI * 2)
+  ctx.arc(cx + 10, y + 9,  9,  0, Math.PI * 2)
+  ctx.arc(cx + 23, y + 5,  13, 0, Math.PI * 2)
+  ctx.arc(cx + 40, y + 9,  9,  0, Math.PI * 2)
   ctx.fill()
+  ctx.restore()
 }
 
 function drawTrex(
@@ -61,16 +83,17 @@ function drawTrex(
   x: number, y: number,
   grounded: boolean,
   frameMs: number,
+  color = '#535353',
 ) {
   const leg = grounded && Math.floor(frameMs / 110) % 2 === 0
-  ctx.fillStyle = '#535353'
+  ctx.fillStyle = color
   ctx.fillRect(x,      y + 20, 9,  7)
   ctx.fillRect(x + 7,  y + 12, 27, 24)
   ctx.fillRect(x + 16, y,      24, 16)
   ctx.fillRect(x + 32, y + 14, 8,  5)
   ctx.fillStyle = '#fff'
   ctx.fillRect(x + 32, y + 3,  5,  5)
-  ctx.fillStyle = '#535353'
+  ctx.fillStyle = color
   ctx.fillRect(x + 34, y + 5,  2,  2)
   ctx.fillRect(x + 16, y + 28, 8,  5)
   if (grounded) {
@@ -95,12 +118,18 @@ export default function DinoChrome({ player, wordLyrics, songDuration, isLoaded 
   // Song-position tracking (updated by addListener)
   const songPosRef      = useRef<number>(0)
   const updateWallRef   = useRef<number>(0)
+  // Beat / chord / chorus maps — populated by onSongMapLoad
+  const beatsRef        = useRef<IBeat[]>([])
+  const chordsRef       = useRef<IChord[]>([])
+  const chorusRangesRef = useRef<{ start: number; end: number }[]>([])
+  const lastBeatIdxRef  = useRef(-1)
   // Lyrics queue (shallow copy of wordLyrics, items shifted out as they spawn)
   const lyricsQueueRef  = useRef<WordLyric[]>([])
   // Game-state flags (refs so game loop reads current value without re-closure)
   const isPausedRef     = useRef<boolean>(false)
   const isEndedRef      = useRef<boolean>(false)
 
+  const [score,      setScore]      = useState(0)
   const [hitCount,   setHitCount]   = useState(0)
   const [hasStarted, setHasStarted] = useState(false)
   const [isPaused,   setIsPaused]   = useState(false)
@@ -118,6 +147,15 @@ export default function DinoChrome({ player, wordLyrics, songDuration, isLoaded 
     if (!player) return
     let mounted = true
     player.addListener({
+      onSongMapLoad(songMap: ISongMap) {
+        if (!mounted) return
+        beatsRef.current  = songMap.beats  ?? []
+        chordsRef.current = songMap.chords ?? []
+        const ranges: { start: number; end: number }[] = []
+        for (const sg of songMap.segments ?? [])
+          if (sg.chorus) for (const s of sg.segments) ranges.push({ start: s.startTime, end: s.endTime })
+        chorusRangesRef.current = ranges
+      },
       onTimeUpdate(position: number) {
         if (!mounted) return
         songPosRef.current    = position
@@ -175,10 +213,15 @@ export default function DinoChrome({ player, wordLyrics, songDuration, isLoaded 
       startWall: 0,
       trex:      { y: 0, vy: 0, grounded: true },
       obstacles: [],
-      clouds:    [{ x: 260, y: 35 }, { x: 560, y: 20 }],
+      clouds:    [
+        { x: 260, y: 35, scale: 1, glitchX: 0, color: '#d4d4d4' },
+        { x: 560, y: 20, scale: 1, glitchX: 0, color: '#d4d4d4' },
+      ],
+      score:     0,
       hitCount:  0,
       blink:     { active: false, timer: 0, visible: true },
       hitIds:    new Set<number>(),
+      passedIds: new Set<number>(),
       frameMs:   0,
     }
 
@@ -258,7 +301,7 @@ export default function DinoChrome({ player, wordLyrics, songDuration, isLoaded 
         ctx.textBaseline = 'middle'
         ctx.fillText('SONG COMPLETE', w / 2, h / 2 - 18)
         ctx.font = '13px "Courier New", Courier, monospace'
-        ctx.fillText(`You hit ${g.hitCount} word${g.hitCount !== 1 ? 's' : ''}`, w / 2, h / 2 + 18)
+        ctx.fillText(`Score: ${g.score}  •  Hits: ${g.hitCount}`, w / 2, h / 2 + 18)
         rafRef.current = requestAnimationFrame(loop)
         return
       }
@@ -335,6 +378,68 @@ export default function DinoChrome({ player, wordLyrics, songDuration, isLoaded 
         ? Math.min(songPosRef.current + (Date.now() - updateWallRef.current), dur || Infinity)
         : wallPos
 
+      // ── Beat + chord sync ─────────────────────────────────────────────────
+      const beats  = beatsRef.current
+      const chords = chordsRef.current
+
+      // Binary-search current beat
+      let beatProgress = 0
+      let beatPos      = 0
+      let beatIdx      = -1
+      if (beats.length > 0) {
+        let lo = 0, hi = beats.length - 1, bi = 0
+        while (lo <= hi) { const mid = (lo + hi) >> 1; if (beats[mid].startTime <= songPos) { bi = mid; lo = mid + 1 } else hi = mid - 1 }
+        const beat = beats[bi]
+        beatProgress = Math.min((songPos - beat.startTime) / beat.duration, 1)
+        beatPos      = beat.position
+        beatIdx      = bi
+      }
+      // Sharper exponential punch — snappy attack, fast decay
+      const beatPunch       = Math.max(0, 1 - beatProgress ** 0.35)
+      const beatJustChanged = beatIdx !== lastBeatIdxRef.current
+      if (beatJustChanged) lastBeatIdxRef.current = beatIdx
+
+      // Binary-search current chord
+      let chordHue   = 200
+      let minorChord = false
+      if (chords.length > 0) {
+        let lo = 0, hi = chords.length - 1, ci = 0
+        while (lo <= hi) { const mid = (lo + hi) >> 1; if (chords[mid].startTime <= songPos) { ci = mid; lo = mid + 1 } else hi = mid - 1 }
+        chordHue   = chordToHue(chords[ci].name)
+        minorChord = chordIsMinor(chords[ci].name)
+      }
+
+      // Chorus → 3× saturation on all colours, louder effects
+      const isChorus = chorusRangesRef.current.some(r => songPos >= r.start && songPos < r.end)
+      const sat      = isChorus ? 3 : 1
+
+      // Per beat-position: downbeat biggest, backbeat medium, off-beats small
+      let punchAmt = 0.08
+      let doGlitch = false
+      switch (beatPos % 4) {
+        case 0: punchAmt = 0.22; doGlitch = isChorus || beatPunch > 0.85; break
+        case 1: punchAmt = 0.07; break
+        case 2: punchAmt = 0.14; break
+        case 3: punchAmt = 0.09; doGlitch = isChorus && beatPunch > 0.85; break
+      }
+
+      // Chord-tinted cloud colour — darkens on punch
+      const cloudColor = `hsl(${chordHue},${Math.min(18 * sat, 60)}%,${(minorChord ? 74 : 82) - beatPunch * 10}%)`
+      for (const cl of g.clouds) {
+        cl.scale = 1 + beatPunch * punchAmt
+        cl.color = cloudColor
+        if (beatJustChanged && doGlitch) cl.glitchX = (Math.random() - 0.5) * 16
+        else if (beatProgress > 0.15)    cl.glitchX = 0
+      }
+
+      // Ground: thickness + chord tint, big flash on downbeat
+      const groundThickness = 2 + beatPunch * (beatPos === 0 ? 6 : 3)
+      const groundColor     = `hsl(${chordHue},${beatPos === 0 && beatPunch > 0.7 ? Math.min(30 * sat, 80) : Math.min(10 * sat, 30)}%,${(minorChord ? 28 : 33) + (beatPos === 0 ? beatPunch * 16 : 0)}%)`
+
+      // Sky and obstacle colours derived from chord
+      const skyColor      = `hsl(${chordHue},${Math.min(7 * sat, 22)}%,${minorChord ? 91 : 97}%)`
+      const obstacleColor = `hsl(${chordHue},${Math.min(6 * sat, 20)}%,33%)`
+
       // Spawn words whose sing-time will arrive just as they reach the dino.
       // travelMs = time for an obstacle to cross from the right edge to the dino.
       const travelMs = ((w - TREX_X) / (speed * 60)) * 1000
@@ -356,7 +461,7 @@ export default function DinoChrome({ player, wordLyrics, songDuration, isLoaded 
       // Clouds
       const lastCloud = g.clouds[g.clouds.length - 1]
       if (!lastCloud || lastCloud.x < w - 260) {
-        g.clouds.push({ x: w + 60, y: 15 + Math.random() * 55 })
+        g.clouds.push({ x: w + 60, y: 15 + Math.random() * 55, scale: 1, glitchX: 0, color: '#d4d4d4' })
       }
 
       // Move obstacles and clouds; remove off-screen ones
@@ -370,9 +475,12 @@ export default function DinoChrome({ player, wordLyrics, songDuration, isLoaded 
       const oy2 = groundY - 6
 
       for (const ob of g.obstacles) {
-        // Dino is standing on top — safe, no hit
+        // Dino is standing on top — safe platform, no hit, no score
         if (ob.id === platformObId) {
-          if (ob.x + ob.w < TREX_X - 10) g.hitIds.delete(ob.id)
+          if (ob.x + ob.w < TREX_X - 10) {
+            g.passedIds.add(ob.id)  // mark passed so it never gets scored
+            g.hitIds.delete(ob.id)
+          }
           continue
         }
 
@@ -390,27 +498,42 @@ export default function DinoChrome({ player, wordLyrics, songDuration, isLoaded 
             g.blink.visible = true
           }
         }
-        if (ob.x + ob.w < TREX_X - 10) g.hitIds.delete(ob.id)
+
+        // Word fully passed dino — score only if dino is not invincible at all
+        if (ob.x + ob.w < TREX_X - 10 && !g.passedIds.has(ob.id)) {
+          g.passedIds.add(ob.id)
+          if (!g.blink.active) {
+            g.score++
+            setScore(g.score)
+          }
+          g.hitIds.delete(ob.id)
+        }
       }
 
       // ── Draw ──────────────────────────────────────────────────────────────
-      for (const cl of g.clouds) drawCloud(ctx, cl.x, cl.y)
-      drawGround(ctx, w, groundY)
+      ctx.fillStyle = skyColor
+      ctx.fillRect(0, 0, w, groundY)
 
-      ctx.fillStyle    = '#535353'
+      for (const cl of g.clouds) drawCloud(ctx, cl.x, cl.y, cl.scale, cl.glitchX, cl.color)
+      drawGround(ctx, w, groundY, groundThickness, groundColor)
+
+      ctx.fillStyle    = obstacleColor
       ctx.font         = FONT
       ctx.textAlign    = 'left'
       ctx.textBaseline = 'alphabetic'
       for (const ob of g.obstacles) ctx.fillText(ob.word, ob.x, groundY - 10)
 
-      if (g.blink.visible) drawTrex(ctx, TREX_X, g.trex.y, g.trex.grounded, g.frameMs)
+      if (g.blink.visible) {
+        const trexColor = g.blink.active ? '#c0392b' : obstacleColor
+        drawTrex(ctx, TREX_X, g.trex.y, g.trex.grounded, g.frameMs, trexColor)
+      }
 
       // Song progress bar
       if (dur > 0) {
         const pct = Math.min(songPos / dur, 1)
-        ctx.fillStyle = 'rgba(83,83,83,0.18)'
+        ctx.fillStyle = `hsl(${chordHue},${Math.min(5 * sat, 15)}%,88%)`
         ctx.fillRect(0, h - 6, w, 6)
-        ctx.fillStyle = '#535353'
+        ctx.fillStyle = `hsl(${chordHue},${Math.min(22 * sat, 65)}%,45%)`
         ctx.fillRect(0, h - 6, w * pct, 6)
       }
 
@@ -431,7 +554,8 @@ export default function DinoChrome({ player, wordLyrics, songDuration, isLoaded 
   return (
     <div id="dino-wrapper">
       <div id="dino-hud">
-        <span id="dino-hits">HITS: {hitCount}</span>
+        <span id="dino-hits">SCORE: {score}</span>
+        <span id="dino-hits" style={{ opacity: 0.6 }}>HITS: {hitCount}</span>
         {!hasStarted && isLoaded  && <span id="dino-status">SPACE / tap to start</span>}
         {isPaused                 && <span id="dino-status">⏸ PAUSED (ESC to resume)</span>}
         {isEnded                  && <span id="dino-status">✓ SONG COMPLETE</span>}

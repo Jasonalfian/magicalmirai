@@ -56,14 +56,6 @@ export default function App() {
         }
       },
 
-      // onSongMapLoad(songMap: ISongMap, reason?: Error) {
-      //   if (disposed) return
-      //   if (reason) {
-      //       console.error(reason);
-      //   }
-
-      //   console.log(songMap);
-      // },
 
       onVideoReady(v: IVideo) {
         if (disposed) return
