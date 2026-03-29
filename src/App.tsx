@@ -23,7 +23,17 @@ export default function App() {
     // so two Players are created. The first Player's callbacks are silenced by its own
     // `disposed = true` set during cleanup; the second Player's closure has disposed=false
     // and is the one that actually drives state.
-    let disposed = false
+    let disposed   = false
+    let videoReady = false
+    let timerReady = false
+
+    // isLoaded flips true only once BOTH video data AND the Songle audio timer are
+    // ready. This guarantees that requestPlay() called from a user gesture reaches
+    // Songle synchronously (no awaited Promises in between), staying inside the
+    // browser's autoplay gesture-token window so audio actually plays.
+    const checkReady = () => {
+      if (videoReady && timerReady && !disposed) setIsLoaded(true)
+    }
 
     const p = new Player({
       app: { token: 'eaFarhRWbobOZTyd' },
@@ -81,7 +91,17 @@ export default function App() {
 
         setWordLyrics(words)
         setSongDuration(v.duration ?? 0)
-        setIsLoaded(true)
+        videoReady = true
+        checkReady()
+      },
+
+      // onTimerReady fires when the Songle audio engine is fully initialised.
+      // Only after this point will requestPlay() from a gesture play audio
+      // synchronously without any async gap that would expire the gesture token.
+      onTimerReady() {
+        if (disposed) return
+        timerReady = true
+        checkReady()
       },
     })
 
