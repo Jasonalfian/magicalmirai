@@ -53,3 +53,23 @@ body,
   overflow: hidden;
 }
 
+#app-media {
+  position: fixed;
+  right: 10px;
+  bottom: 10px;
+  z-index: 100;
+  width: calc(120px + 16vmin);
+}
+
+#app-media > div > div {
+  width: calc(120px + 16vmin) !important;
+  height: calc(45px + 9vmin) !important;
+}
+
+#app-media > div > div.textalive-banner {
+  max-width: initial !important;
+  width: 100% !important;
+  height: initial !important;
+  overflow: hidden;
+}
+

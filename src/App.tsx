@@ -1,0 +1,138 @@
+import { useState, useRef, useEffect } from 'react'
+import { Player } from 'textalive-app-api'
+import type { IPlayerApp, IVideo, IChar, IWord } from 'textalive-app-api'
+import { Lyric } from './utils/CanvasManager'
+import type { WordLyric } from './types'
+import DinoChrome from './DinoChrome/DinoChrome'
+import RandomizedTile from './RandomizedTile/RandomizedTile'
+import './App.css'
+
+export default function App() {
+  const [page, setPage] = useState<'dino' | 'lyric'>('dino')
+
+  // ── Shared TextAlive Player state ─────────────────────────────────────────
+  const mediaRef                        = useRef<HTMLDivElement>(null)
+  const [player,       setPlayer]       = useState<Player | null>(null)
+  const [isLoaded,     setIsLoaded]     = useState(false)
+  const [charLyrics,   setCharLyrics]   = useState<Lyric[]>([])
+  const [wordLyrics,   setWordLyrics]   = useState<WordLyric[]>([])
+  const [songDuration, setSongDuration] = useState(0)
+
+  useEffect(() => {
+    // `disposed` is scoped to each Player instance. StrictMode runs setup+cleanup+setup,
+    // so two Players are created. The first Player's callbacks are silenced by its own
+    // `disposed = true` set during cleanup; the second Player's closure has disposed=false
+    // and is the one that actually drives state.
+    let disposed = false
+
+    const p = new Player({
+      app: { token: 'eaFarhRWbobOZTyd' },
+      mediaElement: mediaRef.current!,
+    })
+
+    p.addListener({
+      onAppReady(app: IPlayerApp) {
+        if (disposed) return
+        if (!app.songUrl) {
+          p.createFromSongUrl('https://piapro.jp/t/GCgy/20250202202635', {
+            video: {
+              beatId: 4694279,
+              chordId: 2830734,
+              repetitiveSegmentId: 2946482,
+              lyricId: 67814,
+              lyricDiffId: 20658,
+            },
+          })
+        }
+      },
+
+      onVideoReady(v: IVideo) {
+        if (disposed) return
+
+        // ── Char lyrics for RandomizedTile ──
+        const chars: Lyric[] = []
+        let c = v.firstChar as IChar | null
+        while (c) { chars.push(new Lyric(c)); c = c.next as IChar | null }
+        setCharLyrics(chars)
+
+        // ── Word lyrics for DinoChrome ──
+        // Group chars by their parent word; standalone chars become their own entry.
+        const wordMap = new Map<IWord, WordLyric>()
+        const standaloneWords: WordLyric[] = []
+        let wc = v.firstChar as IChar | null
+        while (wc) {
+          const word = wc.parent as IWord | null
+          if (word) {
+            if (!wordMap.has(word)) {
+              wordMap.set(word, { text: '', startTime: wc.startTime })
+            }
+            const entry = wordMap.get(word)!
+            entry.text += wc.text
+            if (wc.startTime < entry.startTime) entry.startTime = wc.startTime
+          } else if (wc.text?.trim()) {
+            standaloneWords.push({ text: wc.text, startTime: wc.startTime })
+          }
+          wc = wc.next as IChar | null
+        }
+
+        const words: WordLyric[] = [...wordMap.values(), ...standaloneWords]
+          .filter(w => w.text.trim())
+          .sort((a, b) => a.startTime - b.startTime)
+
+        setWordLyrics(words)
+        setSongDuration(v.duration ?? 0)
+        setIsLoaded(true)
+      },
+    })
+
+    setPlayer(p)
+
+    return () => {
+      disposed = true
+      setPlayer(null)
+      setIsLoaded(false)
+      setCharLyrics([])
+      setWordLyrics([])
+      setSongDuration(0)
+      if (typeof p.dispose === 'function') p.dispose()
+    }
+  }, [])
+
+  return (
+    <div id="app-root">
+      <nav id="app-nav">
+        <button
+          className={`nav-btn${page === 'dino' ? ' active' : ''}`}
+          onClick={() => setPage('dino')}
+        >
+          Dino Chrome
+        </button>
+        <button
+          className={`nav-btn${page === 'lyric' ? ' active' : ''}`}
+          onClick={() => setPage('lyric')}
+        >
+          Lyric Tiles
+        </button>
+      </nav>
+
+      <div id="app-content">
+        {page === 'dino'
+          ? <DinoChrome
+              player={player}
+              wordLyrics={wordLyrics}
+              songDuration={songDuration}
+              isLoaded={isLoaded}
+            />
+          : <RandomizedTile
+              player={player}
+              charLyrics={charLyrics}
+              isLoaded={isLoaded}
+            />
+        }
+      </div>
+
+      {/* TextAlive media widget — lives in App so it persists across tab switches */}
+      <div id="app-media" ref={mediaRef} />
+    </div>
+  )
+}
