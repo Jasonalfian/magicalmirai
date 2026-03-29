@@ -56,6 +56,15 @@ export default function App() {
         }
       },
 
+      // onSongMapLoad(songMap: ISongMap, reason?: Error) {
+      //   if (disposed) return
+      //   if (reason) {
+      //       console.error(reason);
+      //   }
+
+      //   console.log(songMap);
+      // },
+
       onVideoReady(v: IVideo) {
         if (disposed) return
 
@@ -66,30 +75,16 @@ export default function App() {
         setCharLyrics(chars)
 
         // ── Word lyrics for DinoChrome ──
-        // Group chars by their parent word; standalone chars become their own entry.
-        const wordMap = new Map<IWord, WordLyric>()
-        const standaloneWords: WordLyric[] = []
-        let wc = v.firstChar as IChar | null
-        while (wc) {
-          const word = wc.parent as IWord | null
-          if (word) {
-            if (!wordMap.has(word)) {
-              wordMap.set(word, { text: '', startTime: wc.startTime })
-            }
-            const entry = wordMap.get(word)!
-            entry.text += wc.text
-            if (wc.startTime < entry.startTime) entry.startTime = wc.startTime
-          } else if (wc.text?.trim()) {
-            standaloneWords.push({ text: wc.text, startTime: wc.startTime })
-          }
-          wc = wc.next as IChar | null
+        const words: WordLyric[] = []
+        let w = v.firstWord as IWord | null
+        while (w) {
+          if (w.text?.trim()) words.push({ text: w.text, startTime: w.startTime })
+          w = w.next as IWord | null
         }
 
-        const words: WordLyric[] = [...wordMap.values(), ...standaloneWords]
-          .filter(w => w.text.trim())
-          .sort((a, b) => a.startTime - b.startTime)
-
         setWordLyrics(words)
+
+        console.log(words);
         setSongDuration(v.duration ?? 0)
         videoReady = true
         checkReady()

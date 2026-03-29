@@ -289,17 +289,31 @@ export default function DinoChrome({ player, wordLyrics, songDuration, isLoaded 
       const speed  = BASE_SPEED + Math.floor(songPosRef.current / 30000) * 0.5
       const floorY = groundY - TREX_H
 
-      // Physics
-      if (g.trex.grounded) {
-        g.trex.y = floorY
-      } else {
-        g.trex.vy += GRAVITY
-        g.trex.y  += g.trex.vy
-        if (g.trex.y >= floorY) {
-          g.trex.y        = floorY
+      // Physics — gravity every frame; platform & floor snap afterward
+      const prevDinoBottom = g.trex.y + TREX_H
+      g.trex.grounded = false
+      g.trex.vy += GRAVITY
+      g.trex.y  += g.trex.vy
+
+      // Word boxes are solid platforms — dino can land on top and run across
+      const obTop = groundY - FONT_SIZE - 6
+      let platformObId: number | null = null
+      for (const ob of g.obstacles) {
+        const hOvlp = (TREX_X + TREX_W - 3) > ob.x && (TREX_X + 7) < ob.x + ob.w
+        if (hOvlp && prevDinoBottom <= obTop + 2 && g.trex.y + TREX_H >= obTop) {
+          g.trex.y        = obTop - TREX_H
           g.trex.vy       = 0
           g.trex.grounded = true
+          platformObId    = ob.id
+          break
         }
+      }
+
+      // Floor
+      if (g.trex.y >= floorY) {
+        g.trex.y        = floorY
+        g.trex.vy       = 0
+        g.trex.grounded = true
       }
 
       // Blink/invincibility timer
@@ -331,7 +345,12 @@ export default function DinoChrome({ player, wordLyrics, songDuration, isLoaded 
         const lyric = lyricsQueueRef.current.shift()!
         ctx.font = FONT
         const tw = ctx.measureText(lyric.text).width
-        g.obstacles.push({ id: lyric.startTime, word: lyric.text, x: w + 20, w: tw })
+        // Ensure spawned obstacle doesn't overlap the last one on screen
+        const lastOb = g.obstacles[g.obstacles.length - 1]
+        const spawnX = lastOb
+          ? Math.max(w + 20, lastOb.x + lastOb.w + 40)
+          : w + 20
+        g.obstacles.push({ id: lyric.startTime, word: lyric.text, x: spawnX, w: tw })
       }
 
       // Clouds
@@ -344,13 +363,19 @@ export default function DinoChrome({ player, wordLyrics, songDuration, isLoaded 
       g.obstacles = g.obstacles.filter(ob => { ob.x -= speed;        return ob.x + ob.w > -20 })
       g.clouds    = g.clouds.filter(   cl => { cl.x -= speed * 0.25; return cl.x + 80   > 0   })
 
-      // ── Collision: side-only (dino can jump OVER text) ────────────────────
+      // ── Collision: left-face hit only; top is a safe platform ─────────────
       const tx1 = TREX_X + 7,   tx2 = TREX_X + TREX_W - 3
       const ty1 = g.trex.y + 4, ty2 = g.trex.y + TREX_H - 4
       const oy1 = groundY - FONT_SIZE - 6
       const oy2 = groundY - 6
 
       for (const ob of g.obstacles) {
+        // Dino is standing on top — safe, no hit
+        if (ob.id === platformObId) {
+          if (ob.x + ob.w < TREX_X - 10) g.hitIds.delete(ob.id)
+          continue
+        }
+
         const ox1 = ob.x + 2, ox2 = ob.x + ob.w - 2
         const hOverlap = tx2 > ox1 && tx1 < ox2
         const vOverlap = ty2 > oy1 && ty1 < oy2
@@ -412,7 +437,9 @@ export default function DinoChrome({ player, wordLyrics, songDuration, isLoaded 
         {isEnded                  && <span id="dino-status">✓ SONG COMPLETE</span>}
         {!isLoaded                && <span id="dino-status">Loading song…</span>}
       </div>
-      <canvas ref={canvasRef} id="dino-canvas" />
+      <div id="dino-game-area">
+        <canvas ref={canvasRef} id="dino-canvas" />
+      </div>
     </div>
   )
 }

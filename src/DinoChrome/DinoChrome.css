@@ -32,9 +32,18 @@
   margin-left: auto;
 }
 
-#dino-canvas {
+#dino-game-area {
   flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+#dino-canvas {
+  position: absolute;
+  bottom: 0;
+  left: 0;
   width: 100%;
+  height: max(100%, 180px);
   display: block;
   cursor: pointer;
 }
