@@ -6,9 +6,10 @@ import type { WordLyric } from './types'
 import DinoChrome from './DinoChrome/DinoChrome'
 import RandomizedTile from './RandomizedTile/RandomizedTile'
 import './App.css'
+import Maze from './Maze/Mase'
 
 export default function App() {
-  const [page, setPage] = useState<'dino' | 'lyric'>('dino')
+  const [page, setPage] = useState<'dino' | 'lyric' | 'maze'>('maze')
 
   // ── Shared TextAlive Player state ─────────────────────────────────────────
   const mediaRef                        = useRef<HTMLDivElement>(null)
@@ -76,7 +77,6 @@ export default function App() {
 
         setWordLyrics(words)
 
-        console.log(words);
         setSongDuration(v.duration ?? 0)
         videoReady = true
         checkReady()
@@ -120,22 +120,27 @@ export default function App() {
         >
           Lyric Tiles
         </button>
+        <button
+          className={`nav-btn${page === 'maze' ? ' active' : ''}`}
+          onClick={() => setPage('maze')}
+        >
+          Maze
+        </button>
       </nav>
 
       <div id="app-content">
-        {page === 'dino'
-          ? <DinoChrome
-              player={player}
-              wordLyrics={wordLyrics}
-              songDuration={songDuration}
-              isLoaded={isLoaded}
-            />
-          : <RandomizedTile
-              player={player}
-              charLyrics={charLyrics}
-              isLoaded={isLoaded}
-            />
-        }
+        {page === 'maze' && <Maze />}
+        {page === 'dino' && <DinoChrome
+            player={player}
+            wordLyrics={wordLyrics}
+            songDuration={songDuration}
+            isLoaded={isLoaded}
+          />}
+        {page === 'lyric' && <RandomizedTile
+          player={player}
+          charLyrics={charLyrics}
+          isLoaded={isLoaded}
+        />}
       </div>
 
       {/* TextAlive media widget — lives in App so it persists across tab switches */}
