@@ -136,7 +136,7 @@ export default function DinoChrome({ player, wordLyrics, songDuration, isLoaded 
   const [hasStarted, setHasStarted] = useState(false)
   const [isPaused,   setIsPaused]   = useState(false)
   const [isEnded,    setIsEnded]    = useState(false)
-  const [randomizer, setRandomizer] = useState(true)
+  const [randomizer, setRandomizer] = useState(false)
 
   // Keep prop mirrors in sync
   useEffect(() => { playerRef.current       = player       }, [player])
@@ -172,9 +172,13 @@ export default function DinoChrome({ player, wordLyrics, songDuration, isLoaded 
     })
     return () => {
       mounted = false
-      // requestStop resets to 0 so returning to this tab starts fresh
-      if (typeof player.requestStop === 'function') player.requestStop()
-      else if (player.isPlaying) player.requestPause()
+      // requestStop resets to 0 so returning to this tab starts fresh.
+      // Guard with try/catch — the TextAlive player may throw if it hasn't
+      // finished initialising (e.g. when unmounted immediately after song select).
+      try {
+        if (typeof player.requestStop === 'function') player.requestStop()
+        else if (player.isPlaying) player.requestPause()
+      } catch (_) { /* ignore */ }
     }
   }, [player])
 
@@ -504,11 +508,16 @@ export default function DinoChrome({ player, wordLyrics, songDuration, isLoaded 
         const lyric = lyricsQueueRef.current.shift()!
         ctx.font = FONT
         const tw = ctx.measureText(lyric.text).width
+        // Position word so it arrives at the dino exactly at lyric.startTime.
+        // Words already close in time are pre-placed on-screen rather than
+        // always spawned at the far right edge.
+        const timeUntilArrival = lyric.startTime - songPos
+        const idealX = TREX_X + (timeUntilArrival / travelMs) * (w + 20 - TREX_X)
         // Ensure spawned obstacle doesn't overlap the last one on screen
         const lastOb = g.obstacles[g.obstacles.length - 1]
         const spawnX = lastOb
-          ? Math.max(w + 20, lastOb.x + lastOb.w + 40)
-          : w + 20
+          ? Math.max(idealX, lastOb.x + lastOb.w + 40)
+          : idealX
         g.obstacles.push({ id: lyric.startTime, word: lyric.text, x: spawnX, w: tw })
       }
 
