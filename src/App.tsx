@@ -68,6 +68,17 @@ export default function App() {
   const [songDuration, setSongDuration] = useState(0);
   const [selectedSongIdx, setSelectedSongIdx] = useState<number | null>(null);
 
+  const volumeRef = useRef(50);
+  const [volume, setVolume] = useState(50);
+  const [showVolume, setShowVolume] = useState(false);
+  const volumeToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+
+  const [focusedSongIdx, setFocusedSongIdx] = useState(0);
+  const focusedSongIdxRef = useRef(0);
+  const handleSelectSongRef = useRef<(idx: number) => void>(() => {});
+
   // Loading gate refs — resettable from handleSelectSong without recreating the Player
   const videoReadyRef = useRef(false);
   const timerReadyRef = useRef(false);
@@ -164,6 +175,80 @@ export default function App() {
     player.createFromSongUrl(song.url, song.options);
   };
 
+  const handleBackToHome = () => {
+    try {
+      if (typeof player?.requestStop === "function") player.requestStop();
+      else if (player?.isPlaying) player?.requestPause();
+    } catch {
+      /* ignore */
+    }
+    videoReadyRef.current = false;
+    timerReadyRef.current = false;
+    setSelectedSongIdx(null);
+    setIsLoaded(false);
+    setWordLyrics([]);
+    setCharLyrics([]);
+    setSongDuration(0);
+  };
+
+  handleSelectSongRef.current = handleSelectSong;
+
+  React.useEffect(() => {
+    if (selectedSongIdx === null) {
+      focusedSongIdxRef.current = 0;
+      setFocusedSongIdx(0);
+    }
+  }, [selectedSongIdx]);
+
+  React.useEffect(() => {
+    if (selectedSongIdx !== null) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code === "ArrowDown") {
+        e.preventDefault();
+        const next = (focusedSongIdxRef.current + 1) % SONGS.length;
+        focusedSongIdxRef.current = next;
+        setFocusedSongIdx(next);
+      } else if (e.code === "ArrowUp") {
+        e.preventDefault();
+        const next =
+          (focusedSongIdxRef.current - 1 + SONGS.length) % SONGS.length;
+        focusedSongIdxRef.current = next;
+        setFocusedSongIdx(next);
+      } else if (e.code === "Enter") {
+        e.preventDefault();
+        handleSelectSongRef.current(focusedSongIdxRef.current);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedSongIdx]);
+
+  React.useEffect(() => {
+    const onVolumeKey = (e: KeyboardEvent) => {
+      let newVol = volumeRef.current;
+      if (e.key === "+" || e.key === "AudioVolumeUp") {
+        newVol = Math.min(newVol + 10, 100);
+      } else if (e.key === "-" || e.key === "AudioVolumeDown") {
+        newVol = Math.max(newVol - 10, 0);
+      } else {
+        return;
+      }
+      e.preventDefault();
+      volumeRef.current = newVol;
+      if (player) player.volume = newVol;
+      setVolume(newVol);
+      setShowVolume(true);
+      if (volumeToastTimerRef.current)
+        clearTimeout(volumeToastTimerRef.current);
+      volumeToastTimerRef.current = setTimeout(
+        () => setShowVolume(false),
+        1500,
+      );
+    };
+    window.addEventListener("keydown", onVolumeKey);
+    return () => window.removeEventListener("keydown", onVolumeKey);
+  }, [player]);
+
   return (
     <div id="app-root">
       <nav id="app-nav">
@@ -197,8 +282,14 @@ export default function App() {
             {SONGS.map((s, i) => (
               <li key={i}>
                 <button
-                  className="song-picker__item"
+                  className={`song-picker__item${
+                    i === focusedSongIdx ? " song-picker__item--focused" : ""
+                  }`}
                   onClick={() => handleSelectSong(i)}
+                  onMouseEnter={() => {
+                    focusedSongIdxRef.current = i;
+                    setFocusedSongIdx(i);
+                  }}
                 >
                   <span className="song-picker__num">
                     {String(i + 1).padStart(2, "0")}
@@ -214,13 +305,14 @@ export default function App() {
 
       {selectedSongIdx !== null && (
         <div id="app-content">
-          {page === "maze" && <Maze />}
+          {page === "maze" && <Maze onBackToHome={handleBackToHome} />}
           {page === "dino" && (
             <DinoChrome
               player={player}
               wordLyrics={wordLyrics}
               songDuration={songDuration}
               isLoaded={isLoaded}
+              onBackToHome={handleBackToHome}
             />
           )}
           {page === "lyric" && (
@@ -228,10 +320,13 @@ export default function App() {
               player={player}
               charLyrics={charLyrics}
               isLoaded={isLoaded}
+              onBackToHome={handleBackToHome}
             />
           )}
         </div>
       )}
+
+      {showVolume && <div className="volume-toast">VOL {volume}%</div>}
 
       {/* TextAlive media widget — lives in App so it persists across tab switches */}
       <div id="app-media" ref={mediaRef} />

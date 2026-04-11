@@ -2,6 +2,7 @@ import { useRef, useEffect, useCallback, useState } from "react";
 import type { Player, IBeat, ISongMap, IChord } from "textalive-app-api";
 import type { WordLyric } from "../types";
 import "./DinoChrome.css";
+import PauseMenu from "../components/PauseMenu/PauseMenu";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const TREX_X = 80;
@@ -87,6 +88,7 @@ interface Props {
   wordLyrics: WordLyric[];
   songDuration: number;
   isLoaded: boolean;
+  onBackToHome?: () => void;
 }
 
 // ── Canvas helpers ────────────────────────────────────────────────────────────
@@ -157,6 +159,7 @@ export default function DinoChrome({
   wordLyrics,
   songDuration,
   isLoaded,
+  onBackToHome,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const gameRef = useRef<GameState | null>(null);
@@ -180,7 +183,7 @@ export default function DinoChrome({
   // Game-state flags (refs so game loop reads current value without re-closure)
   const isPausedRef = useRef<boolean>(false);
   const isEndedRef = useRef<boolean>(false);
-  const randomizerRef = useRef<boolean>(true);
+  const randomizerRef = useRef<boolean>(false);
 
   const [score, setScore] = useState(0);
   const [hitCount, setHitCount] = useState(0);
@@ -292,6 +295,12 @@ export default function DinoChrome({
     setIsEnded(false);
   }, []);
 
+  const resume = useCallback(() => {
+    isPausedRef.current = false;
+    setIsPaused(false);
+    if (gameRef.current?.started) playerRef.current?.requestPlay();
+  }, []);
+
   // ── Jump / start ──────────────────────────────────────────────────────────
   const jump = useCallback(() => {
     const g = gameRef.current;
@@ -355,13 +364,14 @@ export default function DinoChrome({
       }
       if (e.code === "Escape") {
         e.preventDefault();
-        const g = gameRef.current;
-        if (!g?.started || isEndedRef.current) return;
+        if (isEndedRef.current) return;
         const next = !isPausedRef.current;
         isPausedRef.current = next;
         setIsPaused(next);
-        if (next) playerRef.current?.requestPause();
-        else playerRef.current?.requestPlay();
+        if (gameRef.current?.started) {
+          if (next) playerRef.current?.requestPause();
+          else playerRef.current?.requestPlay();
+        }
       }
       if (e.code === "KeyR") {
         e.preventDefault();
@@ -443,11 +453,6 @@ export default function DinoChrome({
         drawTrex(ctx, TREX_X, g.trex.y, g.trex.grounded, g.frameMs);
         ctx.fillStyle = "rgba(0,0,0,0.45)";
         ctx.fillRect(0, 0, w, h);
-        ctx.fillStyle = "#fff";
-        ctx.font = '700 16px "Courier New", Courier, monospace';
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText("PAUSED  —  ESC to resume", w / 2, h / 2);
         rafRef.current = requestAnimationFrame(loop);
         return;
       }
@@ -770,7 +775,6 @@ export default function DinoChrome({
         {!hasStarted && isLoaded && (
           <span id="dino-status">SPACE / tap to start</span>
         )}
-        {isPaused && <span id="dino-status">⏸ PAUSED (ESC to resume)</span>}
         {isEnded && <span id="dino-status">✓ SONG COMPLETE</span>}
         {!isLoaded && <span id="dino-status">Loading song…</span>}
         <span style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
@@ -793,6 +797,13 @@ export default function DinoChrome({
       </div>
       <div id="dino-game-area">
         <canvas ref={canvasRef} id="dino-canvas" />
+        {isPaused && (
+          <PauseMenu
+            onResume={resume}
+            onRestart={restart}
+            onBackToHome={onBackToHome}
+          />
+        )}
       </div>
     </div>
   );

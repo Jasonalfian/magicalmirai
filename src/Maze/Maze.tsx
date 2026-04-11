@@ -1,4 +1,5 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import PauseMenu from "../components/PauseMenu/PauseMenu";
 
 const map = [
   [1, 1, 1, 1, 1, 1, 1, 1],
@@ -12,23 +13,32 @@ const map = [
 // Store permanent wall colors
 const wallColors: Record<string, string> = {};
 
-export default function Maze() {
+export default function Maze({ onBackToHome }: { onBackToHome?: () => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const pos = useRef({ x: 1.5, y: 1.5 });
   const dir = useRef(0);
   const keys = useRef<Record<string, boolean>>({});
+  const [isPaused, setIsPaused] = useState(false);
+  const isPausedRef = useRef(false);
 
   useEffect(() => {
     const canvas = canvasRef.current!;
     const ctx = canvas.getContext("2d")!;
 
     const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && e.type === "keydown") {
+        const next = !isPausedRef.current;
+        isPausedRef.current = next;
+        setIsPaused(next);
+        return;
+      }
       keys.current[e.key] = e.type === "keydown";
     };
     window.addEventListener("keydown", handleKey);
     window.addEventListener("keyup", handleKey);
 
     function movePlayer() {
+      if (isPausedRef.current) return;
       const speed = 0.05;
       const rotSpeed = 0.03;
       if (keys.current["w"]) {
@@ -127,5 +137,34 @@ export default function Maze() {
     };
   }, []);
 
-  return <canvas ref={canvasRef} width={600} height={400} />;
+  const handleResume = () => {
+    isPausedRef.current = false;
+    setIsPaused(false);
+  };
+
+  const handleRestart = () => {
+    pos.current = { x: 1.5, y: 1.5 };
+    dir.current = 0;
+    Object.keys(wallColors).forEach((k) => delete wallColors[k]);
+    isPausedRef.current = false;
+    setIsPaused(false);
+  };
+
+  return (
+    <div style={{ position: "relative", width: "100%", height: "100%" }}>
+      <canvas
+        ref={canvasRef}
+        width={600}
+        height={400}
+        style={{ width: "100%", height: "100%" }}
+      />
+      {isPaused && (
+        <PauseMenu
+          onResume={handleResume}
+          onRestart={handleRestart}
+          onBackToHome={onBackToHome}
+        />
+      )}
+    </div>
+  );
 }
