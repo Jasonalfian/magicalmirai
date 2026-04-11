@@ -1,3 +1,5 @@
+@import "tailwindcss";
+
 * {
   margin: 0;
   padding: 0;
@@ -35,7 +37,9 @@ body,
   font-weight: 600;
   letter-spacing: 0.05em;
   cursor: pointer;
-  transition: color 0.15s, border-color 0.15s;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
 }
 
 .nav-btn:hover {
@@ -116,7 +120,9 @@ body,
   text-align: left;
   cursor: pointer;
   margin-bottom: 6px;
-  transition: background 0.12s, border-color 0.12s;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
 }
 
 .song-picker__item:hover {
@@ -140,4 +146,3 @@ body,
   color: #666;
   margin-left: 4px;
 }
-

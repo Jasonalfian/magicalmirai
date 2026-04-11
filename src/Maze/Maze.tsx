@@ -1,12 +1,12 @@
 import { useEffect, useRef } from "react";
 
 const map = [
-  [1,1,1,1,1,1,1,1],
-  [1,0,0,0,0,0,0,1],
-  [1,0,1,0,1,0,0,1],
-  [1,0,1,0,1,0,0,1],
-  [1,0,0,0,0,0,0,1],
-  [1,1,1,1,1,1,1,1],
+  [1, 1, 1, 1, 1, 1, 1, 1],
+  [1, 0, 0, 0, 0, 0, 0, 1],
+  [1, 0, 1, 0, 1, 0, 0, 1],
+  [1, 0, 1, 0, 1, 0, 0, 1],
+  [1, 0, 0, 0, 0, 0, 0, 1],
+  [1, 1, 1, 1, 1, 1, 1, 1],
 ];
 
 // Store permanent wall colors
@@ -52,7 +52,8 @@ export default function Maze() {
     }
 
     function splashColor() {
-      if (keys.current[" "]) { // Space key
+      if (keys.current[" "]) {
+        // Space key
         const rayX = pos.current.x + Math.cos(dir.current);
         const rayY = pos.current.y + Math.sin(dir.current);
         const cellX = Math.floor(rayX);
@@ -60,7 +61,8 @@ export default function Maze() {
         if (map[cellY][cellX] === 1) {
           // Assign a random bright color permanently
           wallColors[`${cellX},${cellY}`] =
-            wallColors[`${cellX},${cellY}`] || `hsl(${Math.random() * 360}, 80%, 60%)`;
+            wallColors[`${cellX},${cellY}`] ||
+            `hsl(${Math.random() * 360}, 80%, 60%)`;
         }
       }
     }
@@ -70,7 +72,7 @@ export default function Maze() {
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
       for (let col = 0; col < canvas.width; col++) {
-        const angle = dir.current - 0.5 + (col / canvas.width);
+        const angle = dir.current - 0.5 + col / canvas.width;
         let dist = 0;
         let hit = false;
         let rayX = pos.current.x;
@@ -83,7 +85,10 @@ export default function Maze() {
           dist += 0.05;
           const mx = Math.floor(rayX);
           const my = Math.floor(rayY);
-          if (my < 0 || my >= map.length || mx < 0 || mx >= map[0].length) { hit = true; break; }
+          if (my < 0 || my >= map.length || mx < 0 || mx >= map[0].length) {
+            hit = true;
+            break;
+          }
           if (map[my][mx] === 1) {
             hit = true;
             hitCell = { x: mx, y: my };
@@ -91,7 +96,7 @@ export default function Maze() {
         }
 
         const wallHeight = canvas.height / dist;
-        let shade = Math.max(0, 255 - dist * 15);
+        const shade = Math.max(0, 255 - dist * 15);
         let color = `rgb(${shade}, ${shade}, ${shade})`;
 
         if (hitCell) {
@@ -102,7 +107,7 @@ export default function Maze() {
         }
 
         ctx.fillStyle = color;
-        ctx.fillRect(col, (canvas.height/2 - wallHeight/2), 1, wallHeight);
+        ctx.fillRect(col, canvas.height / 2 - wallHeight / 2, 1, wallHeight);
       }
     }
 
