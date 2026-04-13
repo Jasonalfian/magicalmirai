@@ -1,8 +1,8 @@
 import { useRef, useEffect, useCallback, useState } from "react";
 import type { Player, IBeat, ISongMap, IChord } from "textalive-app-api";
-import type { WordLyric } from "../types";
+import type { WordLyric } from "../../types";
 import "./DinoChrome.css";
-import PauseMenu from "../components/PauseMenu/PauseMenu";
+import PauseMenu from "../../components/PauseMenu/PauseMenu";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const TREX_X = 80;

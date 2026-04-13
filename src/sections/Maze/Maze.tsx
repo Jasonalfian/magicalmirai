@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import PauseMenu from "../components/PauseMenu/PauseMenu";
+import PauseMenu from "../../components/PauseMenu/PauseMenu";
 
 const map = [
   [1, 1, 1, 1, 1, 1, 1, 1],

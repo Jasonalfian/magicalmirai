@@ -1,9 +1,9 @@
 import { useRef, useEffect, useCallback, useState } from "react";
 import type { Player } from "textalive-app-api";
-import { CanvasManager } from "../utils/CanvasManager";
-import type { Lyric } from "../utils/CanvasManager";
+import { CanvasManager } from "../../utils/CanvasManager";
+import type { Lyric } from "../../utils/CanvasManager";
 import "./RandomizedTile.css";
-import PauseMenu from "../components/PauseMenu/PauseMenu";
+import PauseMenu from "../../components/PauseMenu/PauseMenu";
 
 interface Props {
   player: Player | null;
