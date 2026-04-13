@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useDebounce } from "use-debounce";
 import { SONGS } from "../constant";
+import {
+  getSharedAudioContext,
+  closeSharedAudioContext,
+} from "../utils/sharedAudioContext";
 
 const PREVIEW_DURATION = 15; // seconds to play before looping back
 const FADE_DURATION = 0.6; // seconds
@@ -11,7 +15,6 @@ export function useSongPreview(focusedIdx: number) {
   const [muted, setMuted] = useState(false);
   const mutedRef = useRef(false);
 
-  const audioCtxRef = useRef<AudioContext | null>(null);
   const gainRef = useRef<GainNode | null>(null);
   const sourceRef = useRef<AudioBufferSourceNode | null>(null);
   const stopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -20,21 +23,13 @@ export function useSongPreview(focusedIdx: number) {
   // preventing any in-flight async work from a previous song from overlapping.
   const sessionRef = useRef(0);
 
-  // Lazily create a single shared AudioContext
-  const getCtx = () => {
-    if (!audioCtxRef.current) {
-      audioCtxRef.current = new AudioContext();
-    }
-    return audioCtxRef.current;
-  };
-
   const stopCurrent = (immediate = false) => {
     if (stopTimerRef.current) {
       clearTimeout(stopTimerRef.current);
       stopTimerRef.current = null;
     }
     const gain = gainRef.current;
-    const ctx = audioCtxRef.current;
+    const ctx = getSharedAudioContext();
     const source = sourceRef.current;
     if (!gain || !ctx || !source) return;
 
@@ -89,7 +84,7 @@ export function useSongPreview(focusedIdx: number) {
       if (sessionRef.current !== sessionId) return;
 
       try {
-        const ctx = getCtx();
+        const ctx = getSharedAudioContext();
         await ctx.resume();
         if (sessionRef.current !== sessionId) return;
 
@@ -146,7 +141,7 @@ export function useSongPreview(focusedIdx: number) {
   useEffect(() => {
     return () => {
       stopCurrent(true);
-      audioCtxRef.current?.close();
+      closeSharedAudioContext();
     };
   }, []);
 
@@ -155,8 +150,8 @@ export function useSongPreview(focusedIdx: number) {
     mutedRef.current = next;
     setMuted(next);
     const gain = gainRef.current;
-    const ctx = audioCtxRef.current;
-    if (!gain || !ctx) return;
+    const ctx = getSharedAudioContext();
+    if (!gain) return;
     const targetVolume = SONGS[debouncedIdx]?.previewVolume ?? 1;
     const now = ctx.currentTime;
     gain.gain.cancelScheduledValues(now);
