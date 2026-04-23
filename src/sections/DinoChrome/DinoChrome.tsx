@@ -15,6 +15,7 @@ const BLINK_DUR = 3000;
 const BLINK_STEP = 150;
 const FONT_SIZE = 26;
 const FONT = `bold ${FONT_SIZE}px "Courier New", Courier, monospace`;
+const COMBO_SCORE_MULTIPLIER = 2;
 
 // ── Chord → hue (circle of fifths) ──────────────────────────────────────────
 const CHORD_HUES: Record<string, number> = {
@@ -75,7 +76,10 @@ interface GameState {
   obstacles: Obstacle[];
   clouds: Cloud[];
   score: number;
+  normalScore: number;
   hitCount: number;
+  combo: number;
+  maxCombo: number;
   blink: BlinkState;
   hitIds: Set<number>;
   passedIds: Set<number>;
@@ -186,7 +190,10 @@ export default function DinoChrome({
   const randomizerRef = useRef<boolean>(false);
 
   const [score, setScore] = useState(0);
+  const [normalScore, setNormalScore] = useState(0);
   const [hitCount, setHitCount] = useState(0);
+  const [combo, setCombo] = useState(0);
+  const [maxCombo, setMaxCombo] = useState(0);
   const [hasStarted, setHasStarted] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [isEnded, setIsEnded] = useState(false);
@@ -271,7 +278,10 @@ export default function DinoChrome({
       { x: 560, y: 20, scale: 1, glitchX: 0, color: "#d4d4d4" },
     ];
     g.score = 0;
+    g.normalScore = 0;
     g.hitCount = 0;
+    g.combo = 0;
+    g.maxCombo = 0;
     g.blink = { active: false, timer: 0, visible: true };
     g.hitIds = new Set();
     g.passedIds = new Set();
@@ -289,7 +299,10 @@ export default function DinoChrome({
     );
     // Reset React state
     setScore(0);
+    setNormalScore(0);
     setHitCount(0);
+    setCombo(0);
+    setMaxCombo(0);
     setHasStarted(false);
     setIsPaused(false);
     setIsEnded(false);
@@ -343,7 +356,10 @@ export default function DinoChrome({
         { x: 560, y: 20, scale: 1, glitchX: 0, color: "#d4d4d4" },
       ],
       score: 0,
+      normalScore: 0,
       hitCount: 0,
+      combo: 0,
+      maxCombo: 0,
       blink: { active: false, timer: 0, visible: true },
       hitIds: new Set<number>(),
       passedIds: new Set<number>(),
@@ -701,6 +717,8 @@ export default function DinoChrome({
           if (!g.blink.active) {
             g.hitCount++;
             setHitCount(g.hitCount);
+            g.combo = 0;
+            setCombo(0);
             g.blink.active = true;
             g.blink.timer = BLINK_DUR;
             g.blink.visible = true;
@@ -711,7 +729,16 @@ export default function DinoChrome({
         if (ob.x + ob.w < TREX_X - 10 && !g.passedIds.has(ob.id)) {
           g.passedIds.add(ob.id);
           if (!g.blink.active) {
-            g.score++;
+            g.combo++;
+            if (g.combo > g.maxCombo) {
+              g.maxCombo = g.combo;
+              setMaxCombo(g.maxCombo);
+            }
+            setCombo(g.combo);
+            g.normalScore++;
+            setNormalScore(g.normalScore);
+            const points = g.combo >= 2 ? COMBO_SCORE_MULTIPLIER : 1;
+            g.score += points;
             setScore(g.score);
           }
           g.hitIds.delete(ob.id);
@@ -735,6 +762,28 @@ export default function DinoChrome({
       if (g.blink.visible) {
         const trexColor = g.blink.active ? "#c0392b" : obstacleColor;
         drawTrex(ctx, TREX_X, g.trex.y, g.trex.grounded, g.frameMs, trexColor);
+      }
+
+      // ── Combo display ──────────────────────────────────────────────────
+      if (g.combo >= 2) {
+        ctx.save();
+        const comboFontSize = 22;
+        ctx.font = `bold ${comboFontSize}px "Courier New", Courier, monospace`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        const comboAlpha = 0.75 + Math.min(g.combo / 20, 0.25);
+        ctx.fillStyle = randomizerRef.current
+          ? `hsla(${chordHue},${Math.min(55 * sat, 100)}%,38%,${comboAlpha})`
+          : `rgba(83,83,83,${comboAlpha})`;
+        ctx.fillText(`${g.combo}x COMBO`, w / 2, h / 2 - comboFontSize);
+        ctx.font = `11px "Courier New", Courier, monospace`;
+        ctx.fillStyle = `rgba(83,83,83,0.5)`;
+        ctx.fillText(
+          `MAX ${g.maxCombo}`,
+          w / 2,
+          h / 2 - comboFontSize + comboFontSize + 4,
+        );
+        ctx.restore();
       }
 
       // Song progress bar
@@ -770,8 +819,21 @@ export default function DinoChrome({
       <div id="dino-hud">
         <span id="dino-hits">SCORE: {score}</span>
         <span id="dino-hits" style={{ opacity: 0.6 }}>
+          BASE: {normalScore}
+        </span>
+        <span id="dino-hits" style={{ opacity: 0.6 }}>
           HITS: {hitCount}
         </span>
+        {combo >= 2 && (
+          <span id="dino-hits" style={{ color: "#c0392b", fontWeight: 700 }}>
+            COMBO: {combo}x
+          </span>
+        )}
+        {maxCombo >= 2 && (
+          <span id="dino-hits" style={{ opacity: 0.5 }}>
+            BEST: {maxCombo}x
+          </span>
+        )}
         {!hasStarted && isLoaded && (
           <span id="dino-status">SPACE / tap to start</span>
         )}
