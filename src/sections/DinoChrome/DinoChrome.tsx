@@ -16,6 +16,22 @@ const BLINK_STEP = 150;
 const FONT_SIZE = 26;
 const FONT = `bold ${FONT_SIZE}px "Courier New", Courier, monospace`;
 const COMBO_SCORE_MULTIPLIER = 2;
+// [P1] Minimum lyric gap (ms) before beat-synced obstacles are spawned
+const GAP_THRESHOLD = 2500;
+// [P1] Musical note symbols used as beat obstacle labels
+const BEAT_OB_SYMBOLS = ["♪", "♫", "♩", "♬"];
+// [P2] Extra downward acceleration applied each frame when ArrowDown is held mid-air
+const FAST_FALL_VY = 2;
+// [P3] Horizontal-distance thresholds (px from dino left to obstacle left) for judgement grades.
+// Small value = dino was still close to the obstacle when airborne = late, risky jump = better grade.
+const JUDGE_PERFECT = 8; // obstacle left edge within 8px of dino left when airborne
+const JUDGE_GREAT = 22; // obstacle left edge within 22px of dino left when airborne
+// [P3] How long (ms) the judgement popup floats on screen
+const JUDGE_DURATION = 700;
+// [P4] Lifetime (ms) for shatter particles
+const SHATTER_DURATION = 600;
+// [P4] Duration (ms) of the near-miss white flash overlay
+const NEARMISS_FLASH_DURATION = 120;
 
 // ── Chord → hue (circle of fifths) ──────────────────────────────────────────
 const CHORD_HUES: Record<string, number> = {
@@ -67,6 +83,24 @@ interface Obstacle {
   word: string;
   x: number;
   w: number;
+  isBeat?: boolean; // [P1] true = beat-synced obstacle spawned during a lyric gap
+}
+// [P3] Floating judgement popup (PERFECT / GREAT / GOOD)
+interface Judgement {
+  text: string;
+  x: number;
+  y: number;
+  timer: number;
+  color: string;
+}
+// [P4] Individual letter particle from a shattered word
+interface ShatterParticle {
+  char: string;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  alpha: number;
 }
 
 interface GameState {
@@ -83,6 +117,12 @@ interface GameState {
   blink: BlinkState;
   hitIds: Set<number>;
   passedIds: Set<number>;
+  spawnedBeatIds: Set<number>; // [P1] tracks which beats have already spawned an obstacle
+  judgedIds: Set<number>; // [P3] tracks which obstacles have already been graded
+  jumpGradeMap: Map<number, number>; // [P3] gap (px) between dino and obstacle at jump time
+  judgements: Judgement[]; // [P3] active floating judgement popups
+  particles: ShatterParticle[]; // [P4] active word-shatter letter particles
+  nearMissFlash: number; // [P4] countdown timer (ms) for the white screen flash on near-miss
   frameMs: number;
 }
 
@@ -188,6 +228,14 @@ export default function DinoChrome({
   const isPausedRef = useRef<boolean>(false);
   const isEndedRef = useRef<boolean>(false);
   const randomizerRef = useRef<boolean>(false);
+  // [P1] Beat-obstacle feature toggle — ref mirrors the React state so the game loop reads it
+  const beatObRef = useRef<boolean>(false);
+  // [P2] Down-key state for fast-fall
+  const duckKeyRef = useRef<boolean>(false);
+  // [P3] Timing-judgement feature toggle
+  const judgeRef = useRef<boolean>(true);
+  // [P4] Visual effects (shatter + near-miss flash) feature toggle
+  const vfxRef = useRef<boolean>(true);
 
   const [score, setScore] = useState(0);
   const [normalScore, setNormalScore] = useState(0);
@@ -198,6 +246,9 @@ export default function DinoChrome({
   const [isPaused, setIsPaused] = useState(false);
   const [isEnded, setIsEnded] = useState(false);
   const [randomizer, setRandomizer] = useState(false);
+  const [beatObstacles, setBeatObstacles] = useState(false); // [P1] UI state for beat-obstacle toggle
+  const [judgeEnabled, setJudgeEnabled] = useState(true); // [P3] UI state for timing-judgement toggle
+  const [vfxEnabled, setVfxEnabled] = useState(true); // [P4] UI state for visual-effects toggle
 
   // Keep prop mirrors in sync
   useEffect(() => {
@@ -285,6 +336,12 @@ export default function DinoChrome({
     g.blink = { active: false, timer: 0, visible: true };
     g.hitIds = new Set();
     g.passedIds = new Set();
+    g.spawnedBeatIds = new Set();
+    g.judgedIds = new Set(); // [P3]
+    g.jumpGradeMap = new Map(); // [P3]
+    g.judgements = []; // [P3]
+    g.particles = []; // [P4]
+    g.nearMissFlash = 0; // [P4]
     g.frameMs = 0;
     // Reset refs
     songPosRef.current = 0;
@@ -338,6 +395,19 @@ export default function DinoChrome({
     if (g.trex.grounded) {
       g.trex.vy = JUMP_VY;
       g.trex.grounded = false;
+      // [P3] Record how far the nearest obstacle was at the moment of jump
+      if (judgeRef.current) {
+        const upcoming = [...g.obstacles]
+          .filter((ob) => ob.x > TREX_X && !g.passedIds.has(ob.id))
+          .sort((a, b) => a.x - b.x)[0];
+        if (upcoming) {
+          // gap = distance from dino's right edge to obstacle's left edge (0 = near-miss)
+          g.jumpGradeMap.set(
+            upcoming.id,
+            Math.max(0, upcoming.x - (TREX_X + TREX_W)),
+          );
+        }
+      }
     }
   }, []);
 
@@ -363,6 +433,12 @@ export default function DinoChrome({
       blink: { active: false, timer: 0, visible: true },
       hitIds: new Set<number>(),
       passedIds: new Set<number>(),
+      spawnedBeatIds: new Set<number>(),
+      judgedIds: new Set<number>(),
+      jumpGradeMap: new Map<number, number>(),
+      judgements: [],
+      particles: [],
+      nearMissFlash: 0,
       frameMs: 0,
     };
 
@@ -377,6 +453,11 @@ export default function DinoChrome({
       if (e.code === "Space" || e.code === "ArrowUp") {
         e.preventDefault();
         jump();
+      }
+      // [P2] ArrowDown — fast-fall when airborne
+      if (e.code === "ArrowDown") {
+        e.preventDefault();
+        duckKeyRef.current = true;
       }
       if (e.code === "Escape") {
         e.preventDefault();
@@ -394,7 +475,12 @@ export default function DinoChrome({
         restart();
       }
     };
+    // [P2] Release fast-fall on keyup
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === "ArrowDown") duckKeyRef.current = false;
+    };
     window.addEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKeyUp);
     canvas.addEventListener("click", jump);
 
     const loop = (ms: number) => {
@@ -480,11 +566,16 @@ export default function DinoChrome({
       // Normalise per-frame values to wall-clock time so the game runs at
       // the same speed regardless of refresh rate (60 Hz vs 120 Hz etc.)
       const scale = dt / (1000 / 60);
+      // [P4] Tick down near-miss flash timer (does not affect game speed)
+      if (g.nearMissFlash > 0) g.nearMissFlash -= dt;
 
       // Physics — gravity every frame; platform & floor snap afterward
       const prevDinoBottom = g.trex.y + TREX_H;
       g.trex.grounded = false;
       g.trex.vy += GRAVITY * scale;
+      // [P2] Fast-fall — pressing ArrowDown while airborne accelerates downward
+      if (duckKeyRef.current && g.trex.y < floorY)
+        g.trex.vy += FAST_FALL_VY * scale;
       g.trex.y += g.trex.vy * scale;
 
       // Word boxes are solid platforms — dino can land on top and run across
@@ -667,6 +758,52 @@ export default function DinoChrome({
         });
       }
 
+      // ── [P1] Beat-synced obstacles during lyric gaps ──────────────────────
+      // Detects when there is a long gap before the next lyric word.
+      // During that gap, spawns note-symbol obstacles on every other beat
+      // so the player stays engaged during intros, bridges, and instrumentals.
+      const nextLyricMs =
+        lyricsQueueRef.current.length > 0
+          ? lyricsQueueRef.current[0].startTime
+          : dur;
+      const gapRemaining = nextLyricMs - songPos;
+
+      // [P1] Only run when the feature is enabled and gap is wide enough
+      if (
+        beatObRef.current &&
+        gapRemaining > GAP_THRESHOLD &&
+        beats.length > 0
+      ) {
+        // [P1] Spawn window: up to travelMs ahead, but stop 800ms before lyrics resume
+        const spawnEnd = Math.min(songPos + travelMs, nextLyricMs - 800);
+        for (let bi = Math.max(0, beatIdx); bi < beats.length; bi++) {
+          const beat = beats[bi];
+          if (beat.startTime > spawnEnd) break;
+          if (beat.startTime < songPos - 100) continue;
+          if (beat.position % 2 !== 0) continue; // [P1] downbeats and backbeats only (positions 0, 2)
+          if (g.spawnedBeatIds.has(bi)) continue; // [P1] prevent double-spawn
+          g.spawnedBeatIds.add(bi);
+          const symbol = BEAT_OB_SYMBOLS[bi % BEAT_OB_SYMBOLS.length]; // [P1] cycle through note symbols
+          ctx.font = FONT;
+          const tw = ctx.measureText(symbol).width;
+          // [P1] Position so the symbol arrives at the dino exactly on the beat
+          const timeUntilArrival = beat.startTime - songPos;
+          const idealX =
+            TREX_X + (timeUntilArrival / travelMs) * (w + 20 - TREX_X);
+          const lastOb = g.obstacles[g.obstacles.length - 1];
+          const spawnX = lastOb
+            ? Math.max(idealX, lastOb.x + lastOb.w + 40)
+            : idealX;
+          g.obstacles.push({
+            id: -(bi + 1), // [P1] negative IDs distinguish beat obstacles from lyric obstacles
+            word: symbol,
+            x: spawnX,
+            w: tw,
+            isBeat: true,
+          });
+        }
+      }
+
       // Clouds
       const lastCloud = g.clouds[g.clouds.length - 1];
       if (!lastCloud || lastCloud.x < w - 260) {
@@ -694,14 +831,12 @@ export default function DinoChrome({
         tx2 = TREX_X + TREX_W - 3;
       const ty1 = g.trex.y + 4,
         ty2 = g.trex.y + TREX_H - 4;
-      const oy1 = groundY - FONT_SIZE - 6;
-      const oy2 = groundY - 6;
 
       for (const ob of g.obstacles) {
         // Dino is standing on top — safe platform, no hit, no score
         if (ob.id === platformObId) {
           if (ob.x + ob.w < TREX_X - 10) {
-            g.passedIds.add(ob.id); // mark passed so it never gets scored
+            g.passedIds.add(ob.id);
             g.hitIds.delete(ob.id);
           }
           continue;
@@ -709,8 +844,53 @@ export default function DinoChrome({
 
         const ox1 = ob.x + 2,
           ox2 = ob.x + ob.w - 2;
+        const obOy1 = groundY - FONT_SIZE - 6;
+        const obOy2 = groundY - 6;
         const hOverlap = tx2 > ox1 && tx1 < ox2;
-        const vOverlap = ty2 > oy1 && ty1 < oy2;
+        const vOverlap = ty2 > obOy1 && ty1 < obOy2;
+
+        // [P3] Judgement — fires when obstacle clears the dino, graded by gap recorded at jump time.
+        //   jumpDist ≈ 0  → obstacle was right next to dino when jumped → PERFECT (near-miss)
+        //   Small gap     → GREAT
+        //   Large gap     → GOOD (jumped early)
+        if (
+          judgeRef.current &&
+          !g.blink.active &&
+          ob.x + ob.w <= TREX_X &&
+          !g.judgedIds.has(ob.id) &&
+          g.jumpGradeMap.has(ob.id)
+        ) {
+          g.judgedIds.add(ob.id);
+          const jumpDist = g.jumpGradeMap.get(ob.id)!;
+          g.jumpGradeMap.delete(ob.id);
+          let jText = "GOOD";
+          let jColor = "rgba(83,83,83,0.8)";
+          let jBonus = 0;
+          if (jumpDist < JUDGE_PERFECT) {
+            jText = "PERFECT!";
+            jColor = "#e6b422";
+            jBonus = 3;
+          } else if (jumpDist < JUDGE_GREAT) {
+            jText = "GREAT";
+            jColor = "#2ecc71";
+            jBonus = 1;
+          }
+          g.judgements.push({
+            text: jText,
+            x: TREX_X + TREX_W + 10,
+            y: g.trex.y - 5,
+            timer: JUDGE_DURATION,
+            color: jColor,
+          });
+          if (jBonus > 0) {
+            g.score += jBonus;
+            setScore(g.score);
+          }
+          // [P4] PERFECT near-miss flash
+          if (vfxRef.current && jumpDist < JUDGE_PERFECT) {
+            g.nearMissFlash = NEARMISS_FLASH_DURATION;
+          }
+        }
 
         if (hOverlap && vOverlap && !g.hitIds.has(ob.id)) {
           g.hitIds.add(ob.id);
@@ -741,6 +921,20 @@ export default function DinoChrome({
             g.score += points;
             setScore(g.score);
           }
+          // [P4] Word shatter — scatter letters as particles (fires on every pass, not just scoring)
+          if (vfxRef.current) {
+            const baseY = groundY - 10;
+            for (let ci = 0; ci < ob.word.length; ci++) {
+              g.particles.push({
+                char: ob.word[ci],
+                x: ob.x + ci * (ob.w / Math.max(ob.word.length, 1)),
+                y: baseY,
+                vx: (Math.random() - 0.5) * 4,
+                vy: -Math.random() * 5 - 2,
+                alpha: 1,
+              });
+            }
+          }
           g.hitIds.delete(ob.id);
         }
       }
@@ -753,15 +947,69 @@ export default function DinoChrome({
         drawCloud(ctx, cl.x, cl.y, cl.scale, cl.glitchX, cl.color);
       drawGround(ctx, w, groundY, groundThickness, groundColor);
 
-      ctx.fillStyle = obstacleColor;
       ctx.font = FONT;
       ctx.textAlign = "left";
       ctx.textBaseline = "alphabetic";
-      for (const ob of g.obstacles) ctx.fillText(ob.word, ob.x, groundY - 10);
+      for (const ob of g.obstacles) {
+        if (ob.isBeat) {
+          // [P1] Beat obstacles render semi-transparent; pulse with chord hue when FX is on
+          ctx.fillStyle = randomizerRef.current
+            ? `hsla(${chordHue},${Math.min(35 * sat, 80)}%,55%,${0.5 + beatPunch * 0.3})`
+            : "rgba(83,83,83,0.45)";
+        } else {
+          ctx.fillStyle = obstacleColor;
+        }
+        ctx.fillText(ob.word, ob.x, groundY - 10);
+      }
 
       if (g.blink.visible) {
         const trexColor = g.blink.active ? "#c0392b" : obstacleColor;
         drawTrex(ctx, TREX_X, g.trex.y, g.trex.grounded, g.frameMs, trexColor);
+      }
+
+      // [P3] Update and draw judgement popups
+      g.judgements = g.judgements.filter((j) => {
+        j.timer -= dt;
+        j.y -= 0.5 * scale;
+        if (j.timer <= 0) return false;
+        const alpha = Math.min(j.timer / 200, 1);
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.font = `bold 14px "Courier New", Courier, monospace`;
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = j.color;
+        ctx.fillText(j.text, j.x, j.y);
+        ctx.restore();
+        return true;
+      });
+
+      // [P4] Update and draw shatter particles
+      g.particles = g.particles.filter((p) => {
+        p.x += p.vx * scale;
+        p.y += p.vy * scale;
+        p.vy += 0.3 * scale;
+        p.alpha -= dt / SHATTER_DURATION;
+        if (p.alpha <= 0) return false;
+        ctx.save();
+        ctx.globalAlpha = p.alpha;
+        ctx.font = `bold 16px "Courier New", Courier, monospace`;
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillStyle = obstacleColor;
+        ctx.fillText(p.char, p.x, p.y);
+        ctx.restore();
+        return true;
+      });
+
+      // [P4] Near-miss screen flash — brief white border overlay when PERFECT dodge
+      // Using a flash instead of slow-mo because the song audio is managed by TextAlive
+      // and cannot be time-dilated — slowing only game movement would desync from the music.
+      if (g.nearMissFlash > 0) {
+        const flashAlpha = (g.nearMissFlash / NEARMISS_FLASH_DURATION) * 0.35;
+        ctx.strokeStyle = `rgba(255,235,100,${flashAlpha})`;
+        ctx.lineWidth = 12;
+        ctx.strokeRect(0, 0, w, h);
       }
 
       // ── Combo display ──────────────────────────────────────────────────
@@ -809,6 +1057,7 @@ export default function DinoChrome({
       cancelAnimationFrame(rafRef.current);
       window.removeEventListener("resize", resize);
       window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKeyUp); // [P2]
       canvas.removeEventListener("click", jump);
       lastMsRef.current = null;
     };
@@ -854,6 +1103,39 @@ export default function DinoChrome({
             }}
           >
             {randomizer ? "FX: ON" : "FX: OFF"}
+          </button>
+          {/* [P1] Toggle beat-synced obstacles during lyric gaps */}
+          <button
+            className={`hud-btn${beatObstacles ? "" : " hud-btn--off"}`}
+            onClick={() => {
+              const next = !beatObstacles;
+              setBeatObstacles(next);
+              beatObRef.current = next;
+            }}
+          >
+            {beatObstacles ? "BEATS: ON" : "BEATS: OFF"}
+          </button>
+          {/* [P3] Toggle timing judgement popups */}
+          <button
+            className={`hud-btn${judgeEnabled ? "" : " hud-btn--off"}`}
+            onClick={() => {
+              const next = !judgeEnabled;
+              setJudgeEnabled(next);
+              judgeRef.current = next;
+            }}
+          >
+            {judgeEnabled ? "JUDGE: ON" : "JUDGE: OFF"}
+          </button>
+          {/* [P4] Toggle visual effects (word shatter + slow-mo) */}
+          <button
+            className={`hud-btn${vfxEnabled ? "" : " hud-btn--off"}`}
+            onClick={() => {
+              const next = !vfxEnabled;
+              setVfxEnabled(next);
+              vfxRef.current = next;
+            }}
+          >
+            {vfxEnabled ? "VFX: ON" : "VFX: OFF"}
           </button>
         </span>
       </div>
